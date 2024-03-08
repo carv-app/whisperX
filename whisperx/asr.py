@@ -183,7 +183,9 @@ class FasterWhisperPipeline(Pipeline):
                 # print(f2-f1)
                 yield {'inputs': audio[f1:f2]}
 
+        print("Detecting speech segments...")
         vad_segments = self.vad_model({"waveform": torch.from_numpy(audio).unsqueeze(0), "sample_rate": SAMPLE_RATE})
+        print("Merging speech segments...")
         vad_segments = merge_chunks(
             vad_segments,
             chunk_size,
@@ -191,7 +193,10 @@ class FasterWhisperPipeline(Pipeline):
             offset=self._vad_params["vad_offset"],
         )
         if self.tokenizer is None:
-            language = language or self.detect_language(audio)
+            # if language is not preset, detect language using start time of second vad segment
+            start_time = vad_segments[1]["start"]
+            print(f"Start time of second VAD segment: {start_time:.2f}")
+            language = language or self.detect_language(audio, start_time)
             task = task or "transcribe"
             self.tokenizer = faster_whisper.tokenizer.Tokenizer(self.model.hf_tokenizer,
                                                                 self.model.model.is_multilingual, task=task,
@@ -242,11 +247,16 @@ class FasterWhisperPipeline(Pipeline):
         return {"segments": segments, "language": language}
 
 
-    def detect_language(self, audio: np.ndarray):
+    def detect_language(self, audio: np.ndarray, start_time=None):
+        if start_time is None:
+            first_sample = 0
+        else:
+            first_sample = int(start_time * SAMPLE_RATE)
         if audio.shape[0] < N_SAMPLES:
             print("Warning: audio is shorter than 30s, language detection may be inaccurate.")
         model_n_mels = self.model.feat_kwargs.get("feature_size")
-        segment = log_mel_spectrogram(audio[: N_SAMPLES],
+        # start = first segment
+        segment = log_mel_spectrogram(audio[first_sample: first_sample + N_SAMPLES],
                                       n_mels=model_n_mels if model_n_mels is not None else 80,
                                       padding=0 if audio.shape[0] >= N_SAMPLES else N_SAMPLES - audio.shape[0])
         encoder_output = self.model.encode(segment)
